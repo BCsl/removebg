@@ -2,7 +2,7 @@
 #include <android/log.h>
 #include <android/bitmap.h>
 #include <android/asset_manager_jni.h>
-#include "net.h"
+#include "ncnn/net.h"
 
 #define TAG "NCNN_RemoveBG"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, TAG, __VA_ARGS__)
@@ -10,9 +10,11 @@
 
 static ncnn::Net* g_net = nullptr;
 static int g_target_size = 320;
+static const char* g_input_blob_name = "in0";
+static const char* g_output_blob_name = "out0";
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_eren_removebg_NcnnRemover_loadModel(
+Java_dev_eren_removebg_NcnnRemover_loadModelNative(
     JNIEnv* env, jobject thiz,
     jobject assetManager, jstring paramPath, jstring binPath) {
 
@@ -27,6 +29,7 @@ Java_dev_eren_removebg_NcnnRemover_loadModel(
     // 设置选项
     g_net->opt.use_vulkan_compute = false;
     g_net->opt.lightmode = true;
+    g_net->opt.num_threads = 4;
 
     // 获取 AssetManager
     AAssetManager* mgr = AAssetManager_fromJava(env, assetManager);
@@ -110,14 +113,13 @@ Java_dev_eren_removebg_NcnnRemover_inference(
     // 创建 extractor
     ncnn::Extractor ex = g_net->create_extractor();
     ex.set_light_mode(true);
-    ex.set_num_threads(4);
 
-    // 设置输入 (input name depends on model)
-    ex.input("input", in);
+    // u2netp.ncnn.param uses "in0" as input and "out0" as the primary mask output.
+    ex.input(g_input_blob_name, in);
 
     // 推理
     ncnn::Mat out;
-    int ret_extract = ex.extract("output", out);
+    int ret_extract = ex.extract(g_output_blob_name, out);
     if (ret_extract != 0) {
         LOGE("Extract failed: %d", ret_extract);
         return nullptr;
@@ -170,33 +172,21 @@ Java_dev_eren_removebg_NcnnRemover_inference(
         return nullptr;
     }
 
-    // 将输出转换为灰度 Bitmap
+    // U2NetP param file already applies sigmoid on out0, so values should be in [0, 1].
+    // DST_IN masking uses the alpha channel, not RGB, so we must write the mask into A.
     float* outData = (float*)out.data;
     unsigned char* rgbaData = (unsigned char*)maskPixels;
 
-    // 找到输出数据的范围进行归一化
-    float minVal = outData[0];
-    float maxVal = outData[0];
-    for (int i = 1; i < g_target_size * g_target_size; i++) {
-        if (outData[i] < minVal) minVal = outData[i];
-        if (outData[i] > maxVal) maxVal = outData[i];
-    }
-
-    float range = maxVal - minVal;
-    if (range < 0.0001f) range = 1.0f;
-
     for (int i = 0; i < g_target_size * g_target_size; i++) {
         float val = outData[i];
-        // 归一化到 0-255
-        val = (val - minVal) / range * 255.f;
-        if (val < 0) val = 0;
-        if (val > 255) val = 255;
+        if (val < 0.f) val = 0.f;
+        if (val > 1.f) val = 1.f;
 
-        unsigned char gray = (unsigned char)val;
-        rgbaData[i * 4] = gray;      // R
-        rgbaData[i * 4 + 1] = gray;  // G
-        rgbaData[i * 4 + 2] = gray;  // B
-        rgbaData[i * 4 + 3] = 255;   // A
+        unsigned char alpha = (unsigned char)(val * 255.f);
+        rgbaData[i * 4] = 0;          // R
+        rgbaData[i * 4 + 1] = 0;      // G
+        rgbaData[i * 4 + 2] = 0;      // B
+        rgbaData[i * 4 + 3] = alpha;  // A
     }
 
     AndroidBitmap_unlockPixels(env, maskBitmap);

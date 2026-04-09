@@ -11,7 +11,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import java.io.File
 
 /**
  * NCNN-based background remover
@@ -34,16 +33,16 @@ class NcnnRemover(context: Context) : Remover<Bitmap> {
 
     private fun loadModel(context: Context) {
         try {
-            // 复制模型文件到缓存目录
-            val paramPath = copyAssetToCache(context, ModelTypes.U2NET.paramFileName)
-            val binPath = copyAssetToCache(context, ModelTypes.U2NET.binFileName)
+            val modelType = resolveNcnnModel(context)
+            val paramPath = modelType.paramFileName
+            val binPath = modelType.binFileName
 
             isLoaded = loadModelNative(assetManager, paramPath, binPath)
 
             if (isLoaded) {
-                android.util.Log.d(TAG, "NCNN model loaded successfully")
+                android.util.Log.d(TAG, "NCNN model loaded successfully: ${modelType.name}")
             } else {
-                android.util.Log.e(TAG, "NCNN model load failed")
+                android.util.Log.e(TAG, "NCNN model load failed: ${modelType.name}")
             }
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Error loading model: ${e.message}")
@@ -51,16 +50,26 @@ class NcnnRemover(context: Context) : Remover<Bitmap> {
         }
     }
 
-    private fun copyAssetToCache(context: Context, assetName: String): String {
-        val cacheFile = File(context.cacheDir, assetName)
-        if (!cacheFile.exists()) {
+    private fun resolveNcnnModel(context: Context): ModelTypes {
+        val candidates = listOf(ModelTypes.U2NETP, ModelTypes.U2NET)
+        return candidates.firstOrNull { model ->
+            assetExists(context, model.paramFileName) && assetExists(context, model.binFileName)
+        } ?: throw IllegalStateException(
+            "No NCNN model assets found. Expected one of: ${
+                candidates.joinToString { "${it.paramFileName} + ${it.binFileName}" }
+            }"
+        )
+    }
+
+    private fun assetExists(context: Context, assetName: String): Boolean {
+        return try {
             context.assets.open(assetName).use { input ->
-                cacheFile.outputStream().use { output ->
-                    input.copyTo(output)
-                }
+                input.read()
             }
+            true
+        } catch (_: Exception) {
+            false
         }
-        return assetName  // 返回文件名，JNI 会从 assets 加载
     }
 
     override fun clearBackground(image: Bitmap): Flow<Bitmap?> = flow {

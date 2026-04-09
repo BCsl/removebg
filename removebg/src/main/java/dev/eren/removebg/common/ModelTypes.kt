@@ -9,6 +9,6 @@ enum class ModelTypes(
     val binFileName: String = "",
     val onnxFileName: String = ""
 ) {
-    U2NET("u2net.ptl", "u2net.param", "u2net.bin", "u2net.onnx"),
-    U2NETP("u2netp.ptl", "u2netp.param", "u2netp.bin", "u2netp.onnx")
+    U2NET("u2net.ptl", "u2net.ncnn.param", "u2net.ncnn.bin", "u2net.onnx"),
+    U2NETP("u2netp.ptl", "u2netp.ncnn.param", "u2netp.ncnn.bin", "u2netp.onnx")
 }
