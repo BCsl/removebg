@@ -93,7 +93,7 @@ fun RemoveBackground() {
     }
 
     val remover = remember {
-        RemoveBg(context = context)
+        OnnxRemover(context = context)
     }
 
     LaunchedEffect(key1 = inputImage.value) {
