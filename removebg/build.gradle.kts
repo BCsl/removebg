@@ -1,9 +1,13 @@
+import org.gradle.api.tasks.bundling.Zip
+
 @Suppress("DSL_SCOPE_VIOLATION")
 plugins {
     alias(libs.plugins.androidLibrary)
     alias(libs.plugins.kotlinAndroid)
-    `maven-publish`
 }
+
+val libraryVersion = "1.0.4"
+val aarBaseName = "removebg-sdk"
 
 android {
     namespace = "dev.eren.removebg"
@@ -15,7 +19,9 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
-
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     buildTypes {
@@ -41,19 +47,6 @@ android {
             version = "3.22.1"
         }
     }
-
-    defaultConfig {
-        ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
-        }
-    }
-
-    publishing {
-        singleVariant("release") {
-            withSourcesJar()
-            withJavadocJar()
-        }
-    }
 }
 
 dependencies {
@@ -61,29 +54,11 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.androidx.lifecycle.runtime)
 
-    // PyTorch (不支持 16KB page size)
-    implementation(libs.pytorch.android.lite)
-    implementation(libs.pytorch.android.torchvision.lite)
-
-    // ONNX Runtime (支持 16KB page size)
-    implementation(libs.onnxruntime.android)
-
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.espresso.core)
 }
 
-
-publishing {
-    publications {
-        register<MavenPublication>("release") {
-            afterEvaluate {
-                from(components["release"])
-            }
-
-            groupId = "dev.eren"
-            artifactId = "removebg"
-            version = "1.0.4"
-        }
-    }
+tasks.matching { it.name == "bundleReleaseAar" }.configureEach {
+    (this as Zip).archiveFileName.set("$aarBaseName-$libraryVersion.aar")
 }
