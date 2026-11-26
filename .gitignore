@@ -16,3 +16,4 @@ local.properties
 .gstack/
 /venv/
 /.idea/
+/.gradle-home/
