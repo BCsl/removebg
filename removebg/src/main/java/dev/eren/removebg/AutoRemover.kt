@@ -21,7 +21,9 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.Closeable
+import java.nio.FloatBuffer
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.roundToInt
 
 /** Tries an installed ML Kit subject model, falling back to the bundled NCNN model. */
 class AutoRemover(context: Context) : Remover<Bitmap>, Closeable {
@@ -40,7 +42,7 @@ class AutoRemover(context: Context) : Remover<Bitmap>, Closeable {
 
     private val subject = lazy {
         SubjectSegmentation.getClient(
-            SubjectSegmenterOptions.Builder().enableForegroundBitmap().build()
+            SubjectSegmenterOptions.Builder().enableForegroundConfidenceMask().build()
         )
     }
 
@@ -81,8 +83,8 @@ class AutoRemover(context: Context) : Remover<Bitmap>, Closeable {
         if (checkMlKitStatus(requestInstall = true) != MlKitStatus.READY) return null
 
         val segmenter = getSubject() ?: return null
-        val bitmap = segmenter.process(InputImage.fromBitmap(image, 0)).await().foregroundBitmap
-        return bitmap?.takeIf { it.hasVisiblePixels() }
+        val mask = segmenter.process(InputImage.fromBitmap(image, 0)).await().foregroundConfidenceMask
+        return mask?.let { image.applySoftForeground(it) }
     }
 
     private suspend fun checkMlKitStatus(requestInstall: Boolean): MlKitStatus {
@@ -129,18 +131,42 @@ class AutoRemover(context: Context) : Remover<Bitmap>, Closeable {
         null
     }
 
-    private fun Bitmap.hasVisiblePixels(): Boolean {
-        if (!hasAlpha()) return true
-        val row = IntArray(width)
-        for (y in 0 until height) {
-            getPixels(row, 0, width, 0, y, width, 1)
-            if (row.any { it ushr 24 != 0 }) return true
+    private suspend fun Bitmap.applySoftForeground(mask: FloatBuffer): Bitmap? {
+        require(mask.limit().toLong() == width.toLong() * height) { "Unexpected ML Kit mask size" }
+        val coroutineContext = currentCoroutineContext()
+        val output = copy(Bitmap.Config.ARGB_8888, true) ?: return null
+        var keepOutput = false
+        try {
+            output.setHasAlpha(true)
+            val row = IntArray(width)
+            var hasForeground = false
+            for (y in 0 until height) {
+                coroutineContext.ensureActive()
+                val offset = y * width
+                output.getPixels(row, 0, width, 0, y, width, 1)
+                for (x in row.indices) {
+                    val pixel = row[x]
+                    val position = ((mask.get(offset + x) - EDGE_LOW_CONFIDENCE) /
+                        (EDGE_HIGH_CONFIDENCE - EDGE_LOW_CONFIDENCE)).coerceIn(0f, 1f)
+                    val opacity = position * position * (3f - 2f * position)
+                    val alpha = ((pixel ushr 24) * opacity).roundToInt()
+                    row[x] = (pixel and 0x00FFFFFF) or (alpha shl 24)
+                    if (alpha != 0) hasForeground = true
+                }
+                output.setPixels(row, 0, width, 0, y, width, 1)
+            }
+            if (!hasForeground) return null
+            keepOutput = true
+            return output
+        } finally {
+            if (!keepOutput) output.recycle()
         }
-        return false
     }
 
     private companion object {
         const val TAG = "AutoRemover"
         const val MODEL_CHECK_TIMEOUT_MS = 1_000L
+        const val EDGE_LOW_CONFIDENCE = 0.35f
+        const val EDGE_HIGH_CONFIDENCE = 0.65f
     }
 }
