@@ -1,3 +1,8 @@
 <resources>
     <string name="app_name">removebg</string>
+    <string name="mlkit_status_checking">ML Kit：检查中</string>
+    <string name="mlkit_status_ready">ML Kit：已就绪</string>
+    <string name="mlkit_status_model_not_ready">ML Kit：模型未就绪</string>
+    <string name="mlkit_status_play_services_unavailable">ML Kit：Google Play 服务不可用</string>
+    <string name="mlkit_status_check_failed">ML Kit：暂时无法检查状态</string>
 </resources>

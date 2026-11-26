@@ -35,6 +35,14 @@ dependencies {
 
 The current source requires Android 7.0 (API 24) or later. Google Play services delivers the optional ML Kit model. `AutoRemover` requests the model in the background when needed and uses NCNN for the current image.
 
+To request the model after a Google Play installation, add this entry inside the app manifest's `<application>`:
+
+```xml
+<meta-data
+    android:name="com.google.mlkit.vision.DEPENDENCIES"
+    android:value="subject_segment" />
+```
+
 ``` kotlin
 val remover = AutoRemover(context)
 

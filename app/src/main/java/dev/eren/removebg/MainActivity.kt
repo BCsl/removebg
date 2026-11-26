@@ -38,13 +38,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import dev.eren.removebg.AutoRemover.MlKitStatus
 import dev.eren.removebg.ui.theme.RemovebgTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -69,6 +75,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun RemoveBackground() {
     val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     var inputImage by remember { mutableStateOf<Bitmap?>(null) }
 
     val pickMedia = rememberLauncherForActivityResult(
@@ -88,10 +95,22 @@ fun RemoveBackground() {
     var loading by remember(image, preferMlKit) { mutableStateOf(image != null) }
     var showOriginal by remember(image, preferMlKit) { mutableStateOf(false) }
     val remover = remember(context) { AutoRemover(context) }
+    var mlKitStatus by remember(remover) { mutableStateOf<MlKitStatus?>(null) }
 
     DisposableEffect(remover) {
         onDispose {
             CoroutineScope(Dispatchers.IO).launch { remover.close() }
+        }
+    }
+
+    LaunchedEffect(lifecycle, remover) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                val status = remover.getMlKitStatus()
+                mlKitStatus = status
+                if (status == MlKitStatus.READY || status == MlKitStatus.PLAY_SERVICES_UNAVAILABLE) break
+                delay(5_000)
+            }
         }
     }
 
@@ -105,7 +124,7 @@ fun RemoveBackground() {
     }
 
     Scaffold { paddingValues ->
-        Box(modifier = Modifier.background(Color.White)) {
+        Box(modifier = Modifier.background(MaterialTheme.colorScheme.background)) {
             Row(
                 horizontalArrangement = Arrangement.End,
                 modifier = Modifier
@@ -134,6 +153,7 @@ fun RemoveBackground() {
                     ModelToggleButton("Auto", selected = preferMlKit) { preferMlKit = true }
                     ModelToggleButton("U2NetP", selected = !preferMlKit) { preferMlKit = false }
                 }
+                MlKitStatusText(mlKitStatus)
                 Spacer(modifier = Modifier.height(16.dp))
                 val output = outputImage
                 if (loading) {
@@ -154,6 +174,24 @@ fun RemoveBackground() {
             }
         }
     }
+}
+
+@Composable
+private fun MlKitStatusText(status: MlKitStatus?) {
+    val label = when (status) {
+        null -> R.string.mlkit_status_checking
+        MlKitStatus.READY -> R.string.mlkit_status_ready
+        MlKitStatus.MODEL_NOT_READY -> R.string.mlkit_status_model_not_ready
+        MlKitStatus.PLAY_SERVICES_UNAVAILABLE -> R.string.mlkit_status_play_services_unavailable
+        MlKitStatus.CHECK_FAILED -> R.string.mlkit_status_check_failed
+    }
+    Text(
+        text = stringResource(label),
+        modifier = Modifier.padding(horizontal = 16.dp),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onBackground,
+        textAlign = TextAlign.Center
+    )
 }
 
 @Composable

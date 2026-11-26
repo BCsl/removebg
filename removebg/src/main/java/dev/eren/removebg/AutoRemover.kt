@@ -26,6 +26,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** Tries an installed ML Kit subject model, falling back to the bundled NCNN model. */
 class AutoRemover(context: Context) : Remover<Bitmap>, Closeable {
 
+    enum class MlKitStatus {
+        READY,
+        MODEL_NOT_READY,
+        PLAY_SERVICES_UNAVAILABLE,
+        CHECK_FAILED
+    }
+
     private val appContext = context.applicationContext
     private val ncnn = lazy { NcnnRemover(appContext) }
     private val installRequested = AtomicBoolean(false)
@@ -42,7 +49,7 @@ class AutoRemover(context: Context) : Remover<Bitmap>, Closeable {
     /** Set [preferMlKit] to false for offline NCNN-only processing. */
     fun clearBackground(image: Bitmap, preferMlKit: Boolean): Flow<Bitmap?> = flow {
         if (preferMlKit) {
-            val foreground = attempt("ML Kit") { removeWithSubject(image) }
+            val foreground = attempt("ML Kit background removal") { removeWithSubject(image) }
             if (foreground != null) {
                 Log.d(TAG, "Processed image with ML Kit")
                 emit(foreground)
@@ -51,7 +58,7 @@ class AutoRemover(context: Context) : Remover<Bitmap>, Closeable {
         }
 
         currentCoroutineContext().ensureActive()
-        val fallback = attempt("NCNN") {
+        val fallback = attempt("NCNN background removal") {
             val remover = withContext(Dispatchers.IO) { getNcnn() }
             remover?.clearBackground(image)?.first()
         }
@@ -64,26 +71,37 @@ class AutoRemover(context: Context) : Remover<Bitmap>, Closeable {
     override fun getMaskedImage(input: Bitmap, mask: Bitmap): Bitmap =
         applyBitmapMask(input, mask)
 
+    /** Checks whether ML Kit can be used without requesting a model download. */
+    suspend fun getMlKitStatus(): MlKitStatus = withContext(Dispatchers.Default) {
+        attempt("ML Kit readiness check") { checkMlKitStatus(requestInstall = false) }
+            ?: MlKitStatus.CHECK_FAILED
+    }
+
     private suspend fun removeWithSubject(image: Bitmap): Bitmap? {
-        val availability = GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(appContext)
-        if (availability != ConnectionResult.SUCCESS) return null
+        if (checkMlKitStatus(requestInstall = true) != MlKitStatus.READY) return null
 
         val segmenter = getSubject() ?: return null
+        val bitmap = segmenter.process(InputImage.fromBitmap(image, 0)).await().foregroundBitmap
+        return bitmap?.takeIf { it.hasVisiblePixels() }
+    }
+
+    private suspend fun checkMlKitStatus(requestInstall: Boolean): MlKitStatus {
+        val availability = GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(appContext)
+        if (availability != ConnectionResult.SUCCESS) return MlKitStatus.PLAY_SERVICES_UNAVAILABLE
+
+        val segmenter = getSubject() ?: return MlKitStatus.CHECK_FAILED
         val modules = ModuleInstall.getClient(appContext)
         val modelReady = withTimeoutOrNull(MODEL_CHECK_TIMEOUT_MS) {
             modules.areModulesAvailable(segmenter).await().areModulesAvailable()
-        } ?: return null
-        if (!modelReady) {
-            if (installRequested.compareAndSet(false, true)) {
-                modules.deferredInstall(segmenter).addOnCompleteListener { task ->
-                    if (!task.isSuccessful) installRequested.set(false)
-                }
-            }
-            return null
-        }
+        } ?: return MlKitStatus.CHECK_FAILED
+        if (modelReady) return MlKitStatus.READY
 
-        val bitmap = segmenter.process(InputImage.fromBitmap(image, 0)).await().foregroundBitmap
-        return bitmap?.takeIf { it.hasVisiblePixels() }
+        if (requestInstall && installRequested.compareAndSet(false, true)) {
+            modules.deferredInstall(segmenter).addOnCompleteListener { task ->
+                if (!task.isSuccessful) installRequested.set(false)
+            }
+        }
+        return MlKitStatus.MODEL_NOT_READY
     }
 
     @Synchronized
@@ -103,11 +121,11 @@ class AutoRemover(context: Context) : Remover<Bitmap>, Closeable {
         }
     }
 
-    private suspend fun <T> attempt(engine: String, remove: suspend () -> T): T? = try {
-        remove()
+    private suspend fun <T> attempt(operation: String, block: suspend () -> T): T? = try {
+        block()
     } catch (exception: Exception) {
         currentCoroutineContext().ensureActive()
-        Log.w(TAG, "$engine background removal failed", exception)
+        Log.w(TAG, "$operation failed", exception)
         null
     }
 
