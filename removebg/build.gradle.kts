@@ -6,7 +6,7 @@ plugins {
     alias(libs.plugins.kotlinAndroid)
 }
 
-val libraryVersion = "1.0.4"
+val libraryVersion = "1.0.5"
 val aarBaseName = "removebg-sdk"
 
 android {
