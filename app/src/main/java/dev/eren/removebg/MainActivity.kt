@@ -16,19 +16,22 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,10 +41,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import dev.eren.removebg.ui.theme.RemovebgTheme
-import kotlinx.coroutines.flow.onCompletion
-import kotlinx.coroutines.flow.onStart
-
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -64,49 +69,38 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun RemoveBackground() {
     val context = LocalContext.current
-
-    val outputImage: MutableState<Bitmap?> = remember {
-        mutableStateOf<Bitmap?>(null)
-    }
-
-    val inputImage: MutableState<Bitmap?> = remember {
-        mutableStateOf(null)
-    }
+    var inputImage by remember { mutableStateOf<Bitmap?>(null) }
 
     val pickMedia = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
         onResult = { uri ->
             if (uri != null) {
-                inputImage.value =
+                inputImage =
                     MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
             } else {
                 Log.d("PhotoPicker", "No media selected")
             }
         })
 
-    var loading: Boolean by remember {
-        mutableStateOf(false)
+    var preferMlKit by remember { mutableStateOf(true) }
+    val image = inputImage
+    var outputImage by remember(image, preferMlKit) { mutableStateOf<Bitmap?>(null) }
+    var loading by remember(image, preferMlKit) { mutableStateOf(image != null) }
+    var showOriginal by remember(image, preferMlKit) { mutableStateOf(false) }
+    val remover = remember(context) { AutoRemover(context) }
+
+    DisposableEffect(remover) {
+        onDispose {
+            CoroutineScope(Dispatchers.IO).launch { remover.close() }
+        }
     }
 
-    var isReal: Boolean by remember {
-        mutableStateOf(false)
-    }
-
-    val remover = remember {
-        NcnnRemover(context = context)
-    }
-
-    LaunchedEffect(key1 = inputImage.value) {
-        inputImage.value?.let { image ->
-            remover.clearBackground(image)
-                .onStart {
-                    loading = true
-                }
-                .onCompletion {
-                    loading = false
-                }.collect { output ->
-                    outputImage.value = output
-                }
+    LaunchedEffect(image, preferMlKit, remover) {
+        if (image == null) return@LaunchedEffect
+        try {
+            outputImage = remover.clearBackground(image, preferMlKit).first()
+        } finally {
+            loading = false
         }
     }
 
@@ -131,21 +125,50 @@ fun RemoveBackground() {
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
+                ) {
+                    ModelToggleButton("Auto", selected = preferMlKit) { preferMlKit = true }
+                    ModelToggleButton("U2NetP", selected = !preferMlKit) { preferMlKit = false }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                val output = outputImage
                 if (loading) {
                     CircularProgressIndicator()
-                }
-                if (outputImage.value != null && inputImage.value != null) {
+                } else if (image != null && output == null) {
+                    Text(text = "抠图失败", color = MaterialTheme.colorScheme.error)
+                } else if (image != null && output != null) {
                     Image(
-                        bitmap = if (!isReal) outputImage.value!!.asImageBitmap() else inputImage.value!!.asImageBitmap(),
+                        bitmap = (if (showOriginal) image else output).asImageBitmap(),
                         contentDescription = "",
                         Modifier
                             .fillMaxWidth()
                             .clickable {
-                                isReal = !isReal
+                                showOriginal = !showOriginal
                             }
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ModelToggleButton(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    if (selected) {
+        Button(onClick = onClick) {
+            Text(text = label)
+        }
+    } else {
+        OutlinedButton(onClick = onClick) {
+            Text(text = label)
         }
     }
 }

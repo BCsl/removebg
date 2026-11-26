@@ -11,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import java.lang.ref.WeakReference
 import kotlin.math.pow
 
 /**
@@ -22,29 +23,28 @@ class NcnnRemover(
     maskStrength: Float = DEFAULT_MASK_STRENGTH
 ) : Remover<Bitmap> {
 
-    private val assetManager = context.assets
+    private val appContext = context.applicationContext
+    private val assetManager = appContext.assets
     private var isLoaded = false
     private var maskStrength = maskStrength.coerceIn(MIN_MASK_STRENGTH, MAX_MASK_STRENGTH)
-    private val maskPaint: Paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val targetSize = 320
 
     init {
-        maskPaint.isAntiAlias = true
-        maskPaint.style = Paint.Style.FILL
-        maskPaint.setXfermode(PorterDuffXfermode(PorterDuff.Mode.DST_IN))
-
-        loadModel(context)
+        synchronized(nativeModelLock) { loadModel() }
     }
 
-    private fun loadModel(context: Context) {
+    private fun isNativeOwner(): Boolean = nativeOwner?.get() === this
+
+    private fun loadModel() {
         try {
-            val modelType = resolveNcnnModel(context)
+            val modelType = resolveNcnnModel(appContext)
             val paramPath = modelType.paramFileName
             val binPath = modelType.binFileName
 
+            nativeOwner = null
             isLoaded = loadModelNative(assetManager, paramPath, binPath)
 
             if (isLoaded) {
+                nativeOwner = WeakReference(this)
                 android.util.Log.d(TAG, "NCNN model loaded successfully: ${modelType.name}")
             } else {
                 android.util.Log.e(TAG, "NCNN model load failed: ${modelType.name}")
@@ -82,16 +82,11 @@ class NcnnRemover(
         emit(removeBackground(mutableImage))
     }.flowOn(Dispatchers.IO)
 
-    override fun getMaskedImage(input: Bitmap, mask: Bitmap): Bitmap {
-        val result = Bitmap.createBitmap(mask.width, mask.height, Bitmap.Config.ARGB_8888)
-        val mCanvas = Canvas(result)
+    override fun getMaskedImage(input: Bitmap, mask: Bitmap): Bitmap = applyBitmapMask(input, mask)
 
-        mCanvas.drawBitmap(input, 0f, 0f, null)
-        mCanvas.drawBitmap(mask, 0f, 0f, maskPaint)
-        return result
-    }
-
-    private fun removeBackground(input: Bitmap): Bitmap? {
+    private fun removeBackground(input: Bitmap): Bitmap? = synchronized(nativeModelLock) {
+        // The JNI bridge owns one network across all remover instances.
+        if (isLoaded && !isNativeOwner()) loadModel()
         if (!isLoaded) {
             android.util.Log.e(TAG, "Model not loaded")
             return null
@@ -157,7 +152,7 @@ class NcnnRemover(
     /**
      * 检查模型是否加载成功
      */
-    fun isModelLoaded(): Boolean = isLoaded
+    fun isModelLoaded(): Boolean = synchronized(nativeModelLock) { isLoaded }
 
     fun getMaskStrength(): Float = maskStrength
 
@@ -169,8 +164,13 @@ class NcnnRemover(
      * 释放模型资源
      */
     fun destroy() {
-        release()
-        isLoaded = false
+        synchronized(nativeModelLock) {
+            if (isNativeOwner()) {
+                release()
+                nativeOwner = null
+            }
+            isLoaded = false
+        }
     }
 
     // JNI 原生方法
@@ -186,6 +186,8 @@ class NcnnRemover(
 
     companion object {
         private const val TAG = "NcnnRemover"
+        private val nativeModelLock = Any()
+        private var nativeOwner: WeakReference<NcnnRemover>? = null
         const val DEFAULT_MASK_STRENGTH = 1.35f
         const val MIN_MASK_STRENGTH = 0.5f
         const val MAX_MASK_STRENGTH = 3.0f
@@ -194,4 +196,15 @@ class NcnnRemover(
             System.loadLibrary("ncnn_removebg")
         }
     }
+}
+
+internal fun applyBitmapMask(input: Bitmap, mask: Bitmap): Bitmap {
+    val result = Bitmap.createBitmap(mask.width, mask.height, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(result)
+    val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
+    }
+    canvas.drawBitmap(input, 0f, 0f, null)
+    canvas.drawBitmap(mask, 0f, 0f, maskPaint)
+    return result
 }

@@ -1,2 +1,3 @@
 -keep class dev.eren.removebg.Remover { *; }
 -keep class dev.eren.removebg.NcnnRemover { *; }
+-keep class dev.eren.removebg.AutoRemover { *; }

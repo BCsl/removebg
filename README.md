@@ -2,7 +2,10 @@
 
 [![Release](https://jitpack.io/v/com.github.erenalpaslan/removebg.svg)](https://jitpack.io/#com.github.erenalpaslan/removebg)  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)<br>
 
-The "removebg" Android library simplifies background removal from images using the U2Net model. With this library, you can quickly integrate background removal functionality into your Android app.
+The "removebg" Android library simplifies background removal from images on Android. It currently includes:
+
+- `NcnnRemover`: offline U2Net/NCNN-based background removal.
+- `AutoRemover`: ML Kit Subject Segmentation when the model is ready, with offline NCNN (U2NetP) fallback. The Demo defaults to Auto and also offers U2NetP mode for offline comparison.
 
 | Original Image | Background Removed Image |
 | -------------- | ------------------------- |
@@ -30,15 +33,17 @@ dependencies {
 
 ## Usage
 
-Here's a quick example of how to use the "removebg" library in your Android app:
+The current source requires Android 7.0 (API 24) or later. Google Play services delivers the optional ML Kit model. `AutoRemover` requests the model in the background when needed and uses NCNN for the current image.
 
 ``` kotlin
-val remover = RemoveBg(context)
+val remover = AutoRemover(context)
 
 remover.clearBackground(inputImage.value).collect { output ->
     outputImage.value = output
 }
 ```
+
+Call `remover.close()` when you no longer need the remover.
 
 ## Contributions and Issues
 
@@ -47,6 +52,4 @@ Contributions and issue reports are welcome! Feel free to contribute to the deve
 ## License
 
  * MIT ([LICENSE](LICENSE) or https://opensource.org/license/mit/)
-
-
 
